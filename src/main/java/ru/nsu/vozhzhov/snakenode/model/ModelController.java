@@ -1,5 +1,6 @@
 package ru.nsu.vozhzhov.snakenode.model;
 
+import lombok.Getter;
 import ru.nsu.vozhzhov.snakenode.proto.SnakesProto;
 
 import java.io.File;
@@ -11,31 +12,40 @@ import java.util.Properties;
 import java.util.Random;
 
 public class ModelController {
-    Random r;
+    private final Random r;
     
     private SnakesProto.NodeRole role;
     private SnakesProto.GameState gameState;
-
-    private int width;
-    private int height;
-    private int foodStatic;
-    private int stateDelayMs;
-
+    @Getter
+    private SnakesProto.GameConfig gameConfig;
     private int stateOrder;
 
-    public  ModelController() {
+    public ModelController() {
         r = new Random();
         role = SnakesProto.NodeRole.MASTER;
         stateOrder = 0;
 
+        loadConfig();
+        initState();
+    }
+
+    public SnakesProto.GameState getGameState() {
+        stateOrder++;
+        return gameState;
     }
 
     private void loadConfig() {
-        File propertyFile = new File("resources/ru/nsu/vozhzhov/snakenode/config.properties");
+        int width, height, foodStatic, stateDelayMs;
 
+        File propertyFile = new File("resources/ru/nsu/vozhzhov/snakenode/config.properties");
+        System.out.println(propertyFile.exists());
         Properties properties = new Properties();
         try {
             properties.load(new FileReader(propertyFile));
+            width = Integer.parseInt(properties.getProperty("width"));
+            height = Integer.parseInt(properties.getProperty("height"));
+            foodStatic = Integer.parseInt(properties.getProperty("foodStatic"));
+            stateDelayMs = Integer.parseInt(properties.getProperty("stateDelayMs"));
         } catch (IOException e) {
             width = 40;
             height = 30;
@@ -43,30 +53,43 @@ public class ModelController {
             stateDelayMs = 1000;
         }
 
-        width = Integer.parseInt(properties.getProperty("width"));
-        height = Integer.parseInt(properties.getProperty("height"));
-        foodStatic = Integer.parseInt(properties.getProperty("foodStatic"));
-        stateDelayMs = Integer.parseInt(properties.getProperty("stateDelayMs"));
+        gameConfig = SnakesProto.GameConfig.newBuilder()
+                .setHeight(height)
+                .setWidth(width)
+                .setFoodStatic(foodStatic)
+                .setStateDelayMs(stateDelayMs)
+                .build();
     }
 
     private void initState() {
-        SnakesProto.GameState.Snake snake = createSnakeOnFreePlace();
+        SnakesProto.GamePlayer player = getCreatePlayer();
+        SnakesProto.GameState.Snake snake = getCreateSnakeOnFreePlace(player);
 
         List<SnakesProto.GameState.Coord> listFoods = new ArrayList<>();
         List<SnakesProto.GameState.Snake> listSnakes = new ArrayList<>();
         listSnakes.add(snake);
 
         SnakesProto.GameState.Builder gameStateBuilder = SnakesProto.GameState.newBuilder();
-        for (int foodi = 0; foodi < foodStatic + 1; ++foodi) {
+        for (int foodi = 0; foodi < gameConfig.getFoodStatic() + 1; ++foodi) {
             SnakesProto.GameState.Coord food = getCreateRandomFood(listSnakes, listFoods);
-            gameStateBuilder.setFoods(foodi, food);
+            gameStateBuilder.addFoods(food);
             listFoods.add(food);
         }
-        gameStateBuilder.setStateOrder(stateOrder).setSnakes(0, snake);
+        gameStateBuilder
+                .setStateOrder(stateOrder)
+                .addSnakes(snake);
+        gameStateBuilder.setPlayers(SnakesProto.GamePlayers.newBuilder().addPlayers(player).build());
 
-//        SnakesProto.GamePlayer player =
+        gameState = gameStateBuilder.build();
+    }
 
-//        gameState = gameStateBuilder.build();
+    private SnakesProto.GamePlayer getCreatePlayer() {
+        return SnakesProto.GamePlayer.newBuilder()
+                .setId(1)
+                .setName("MASTER")
+                .setRole(SnakesProto.NodeRole.MASTER)
+                .setScore(0)
+                .build();
     }
 
     private SnakesProto.GameState.Coord getCreateRandomFood(
@@ -78,8 +101,8 @@ public class ModelController {
 
         while (!free) {
             free = true;
-            rx = r.nextInt(width);
-            ry = r.nextInt(height);
+            rx = r.nextInt(gameConfig.getWidth());
+            ry = r.nextInt(gameConfig.getHeight());
 
             for (SnakesProto.GameState.Snake snake : listSnakes) {
                 if (hasCoordCollision(rx, ry, snake.getPointsList())) {
@@ -106,12 +129,12 @@ public class ModelController {
     private void handleMove(SnakesProto.GameMessage gameMessage) {
     }
 
-    private SnakesProto.GameState.Snake createSnakeOnFreePlace() {
+    private SnakesProto.GameState.Snake getCreateSnakeOnFreePlace(SnakesProto.GamePlayer player) {
         int area = 5;
-        for (int yi = 0; yi < height; ++yi) {
-            for (int xi = 0; xi < width; ++xi) {
-                if (!hasFreeSquare(xi, yi, area)) {
-                    return getCreateSnake(xi, yi);
+        for (int yi = 0; yi < gameConfig.getHeight(); ++yi) {
+            for (int xi = 0; xi < gameConfig.getWidth(); ++xi) {
+                if (hasFreeSquare(xi, yi, area)) {
+                    return getCreateSnake(xi, yi, player);
                 }
             }
         }
@@ -119,9 +142,9 @@ public class ModelController {
         return null;
     }
 
-    private SnakesProto.GameState.Snake getCreateSnake(int xLeft, int yTop) {
-        int x = (xLeft + 2) % width;
-        int y = (yTop + 2) % height;
+    private SnakesProto.GameState.Snake getCreateSnake(int xLeft, int yTop, SnakesProto.GamePlayer player) {
+        int x = (xLeft + 2) % gameConfig.getWidth();
+        int y = (yTop + 2) % gameConfig.getHeight();
 
         SnakesProto.Direction dir = getRandomDir();
         SnakesProto.GameState.Coord head = SnakesProto.GameState.Coord.newBuilder()
@@ -131,30 +154,28 @@ public class ModelController {
         SnakesProto.GameState.Coord tail = SnakesProto.GameState.Coord.newBuilder(getCoordByDir(x, y, dir))
                 .build();
 
-        SnakesProto.GameState.Snake snake = SnakesProto.GameState.Snake.newBuilder()
+        return SnakesProto.GameState.Snake.newBuilder()
                 .setState(SnakesProto.GameState.Snake.SnakeState.ALIVE)
                 .setHeadDirection(dir)
-                .setPoints(0, head)
-                .setPoints(1, tail)
-//                .setPlayerId()
+                .addPoints(head)
+                .addPoints(tail)
+                .setPlayerId(player.getId())
                 .build();
-
-        return snake;
     }
 
     private SnakesProto.GameState.Coord getCoordByDir(int x, int y, SnakesProto.Direction dir) {
         switch (dir) {
             case UP -> {
-                return SnakesProto.GameState.Coord.newBuilder().setX(x).setY((y + 1) % height).build();
+                return SnakesProto.GameState.Coord.newBuilder().setX(x).setY((y + 1) % gameConfig.getHeight()).build();
             }
             case LEFT -> {
-                return SnakesProto.GameState.Coord.newBuilder().setX((x + 1) % width).setY(y).build();
+                return SnakesProto.GameState.Coord.newBuilder().setX((x + 1) % gameConfig.getWidth()).setY(y).build();
             }
             case RIGHT -> {
-                return SnakesProto.GameState.Coord.newBuilder().setX((x - 1) % width).setY(y).build();
+                return SnakesProto.GameState.Coord.newBuilder().setX((x - 1) % gameConfig.getWidth()).setY(y).build();
             }
             default -> {
-                return SnakesProto.GameState.Coord.newBuilder().setX(x).setY((y - 1) % height).build();
+                return SnakesProto.GameState.Coord.newBuilder().setX(x).setY((y - 1) % gameConfig.getHeight()).build();
             }
         }
     }
@@ -179,28 +200,31 @@ public class ModelController {
 
     // Maybe make n*m matrix and upd every turn
     private boolean hasFreeSquare(int xi, int yi, int area) {
+        if (gameState == null) {
+            return true;
+        }
         List<SnakesProto.GameState.Coord> listFoods = gameState.getFoodsList();
         List<SnakesProto.GameState.Snake> listSnakes = gameState.getSnakesList();
         int x, y;
 
         for (int yOffset = 0; yOffset < area; ++yOffset) {
             for (int xOffset = 0; xOffset < area; ++xOffset) {
-                x = (xi + xOffset) % width;
-                y = (yi + yOffset) % height;
+                x = (xi + xOffset) % gameConfig.getWidth();
+                y = (yi + yOffset) % gameConfig.getHeight();
 
                 if (hasCoordCollision(x, y, listFoods)) {
-                    return true;
+                    return false;
                 }
 
                 for (SnakesProto.GameState.Snake snake: listSnakes) {
                     if (hasCoordCollision(x, y, snake.getPointsList())) {
-                        return true;
+                        return false;
                     }
                 }
             }
         }
 
-        return false;
+        return true;
     }
 
     private boolean hasCoordCollision(int x, int y, List<SnakesProto.GameState.Coord> listCoords) {
